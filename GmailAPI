@@ -1,0 +1,92 @@
+from __future__ import print_function
+import os.path
+import base64
+import sys
+import time
+from datetime import datetime
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+
+# Python script for gmail Integration
+
+# need to test it 
+
+sys.stdout.reconfigure(encoding='utf-8') # encoding for special chars
+
+SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
+
+def main():
+    creds = None
+
+    # stores all credits on token.json file
+    if os.path.exists('token.json'):
+        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+
+        # requests for new credits it not valid or expired
+    if not creds or not creds.valid:
+
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+
+            # runs on local server
+            flow = InstalledAppFlow.from_client_secrets_file(
+                r'C:\Users\chess\Desktop\Src\credentials.json', SCOPES)
+            creds = flow.run_local_server(port=0)
+        with open('token.json', 'w') as token:
+            token.write(creds.to_json())
+
+    service = build('gmail', 'v1', credentials=creds)
+
+    # gets the messages from inbox
+
+    results = service.users().messages().list(userId='me', labelIds=['INBOX'], maxResults=10).execute()
+    messages = results.get('messages', [])
+     
+     # getting the label ID of the message
+    for msg in messages:
+        msg_details = service.users().messages().get(userId='me', id=msg['id'], format='metadata').execute()
+        labels = msg_details.get('labelIds', [])
+
+       
+        # Convert timestamp to proper date
+        timestamp_ms = int(msg_details['internalDate'])
+        dt = datetime.fromtimestamp(timestamp_ms / 1000)  # Local time
+        readable_timestamp = dt.strftime("%Y-%m-%d %H:%M:%S")
+        print("Timestamp:", readable_timestamp)
+        print("Day:", dt.day)
+        print("Month:", dt.month)
+
+        # Get subject and sender of the email
+        headers = msg_details['payload']['headers']
+        subject = next((h['value'] for h in headers if h['name'] == 'Subject'), '(No Subject)')
+        sender = next((h['value'] for h in headers if h['name'] == 'From'), '(No Sender)')
+
+        print("From:", sender)
+        print("Subject:", subject)
+
+        # Fetches email body
+        msg_contents = service.users().messages().get(userId='me', id=msg['id'], format='full').execute()
+        parts = msg_contents['payload'].get('parts', [])
+        body = ""
+
+        if parts:
+
+            # gets the body of the email
+            for part in parts:
+                if part['mimeType'] == 'text/plain':
+                    body_data = part['body'].get('data')
+                    if body_data:
+                        body += base64.urlsafe_b64decode(body_data).decode('utf-8', errors='ignore')
+        else:
+            body_data = msg_contents['payload']['body'].get('data')
+            if body_data:
+                body += base64.urlsafe_b64decode(body_data).decode('utf-8', errors='ignore')
+
+        print("Body:\n", body.strip()[:500])  # Limit to first 500 characters
+        print("--------------------------------------------------")
+
+if __name__ == '__main__':
+    main()
