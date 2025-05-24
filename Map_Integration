@@ -1,0 +1,52 @@
+from flask import Flask # importing flask 
+from flask import request
+import os
+from dotenv import load_dotenv
+import requests
+
+
+load_dotenv()
+
+API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
+
+# Google's Reverse Geocoding API 
+
+app = Flask(__name__) # constructor that initialises the flask to the app
+
+@app.route("/location", methods=["POST"]) # defines route when clicked on the url
+
+
+def get_location():
+  data = request.get_json()
+  lon= data.get("longitude")
+  lati =data.get("latitude")
+  # calling the google maps to get exact location now
+  url = f"https://maps.googleapis.com/maps/api/geocode/json?latlng={lati},{lon}&key={API_KEY}"
+  response = requests.get(url)
+  location = response.json()
+  city = location["results"][0]["formatted_address"]
+  return city
+
+
+
+def home():
+    # for testing remove once done
+  url = "http://127.0.0.1:5000/location"
+  data = {
+        "latitude": 43.65,
+        "longitude": -79.38
+    }
+  response = requests.post(url, json=data)
+  print("RESPONSE FROM /location:", response.text)
+  return "Test triggered! Check terminal."
+
+
+
+
+if(__name__ == "__main__"): 
+   app.run()
+ 
+
+
+
+    
