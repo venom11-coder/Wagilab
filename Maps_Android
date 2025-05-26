@@ -1,0 +1,159 @@
+package com.example.get_location
+
+// XML File starts from Line 127
+// this code is asking longitude and latitute for current location and then once connect with the Python code will return the name of city user is living
+// works if user has enabled GPS
+// will need to test on a real android for first time users and make sure it is not returning null
+// have used currentlocation() method to return the location
+// code will print 'unavailable' if no location found
+
+
+
+
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import com.example.get_location.ui.theme.Get_LocationTheme
+import com.google.android.gms.location.LocationServices
+import androidx.activity.compose.rememberLauncherForActivityResult
+
+
+class MainActivity : ComponentActivity() {
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+
+        val fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
+
+        setContent {
+            Get_LocationTheme {
+                val latitude = remember { mutableStateOf("Loading...") }
+                val longitude = remember { mutableStateOf("Loading...") }
+
+                val requestPermissionLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.RequestPermission()
+                ) { isGranted: Boolean ->
+                    if (isGranted) {
+                        // Permission granted, get location
+                        val cancellationTokenSource = com.google.android.gms.tasks.CancellationTokenSource()
+
+                        fusedLocationClient.getCurrentLocation(
+                            com.google.android.gms.location.LocationRequest.PRIORITY_HIGH_ACCURACY,
+                            cancellationTokenSource.token
+                        ).addOnSuccessListener { location ->
+                            if (location != null) {
+                                latitude.value = location.latitude.toString()
+                                longitude.value = location.longitude.toString()
+                            } else {
+                                latitude.value = "Unavailable"
+                                longitude.value = "Unavailable"
+                            }
+                        }
+
+                    } else {
+                        latitude.value = "Permission Denied"
+                        longitude.value = "Permission Denied"
+                    }
+                }
+
+                // Request permission on launch
+                LaunchedEffect(Unit) {
+                    if (ContextCompat.checkSelfPermission(
+                            this@MainActivity,
+                            Manifest.permission.ACCESS_FINE_LOCATION
+                        ) == PackageManager.PERMISSION_GRANTED
+                    ) {
+                        fusedLocationClient.lastLocation.addOnSuccessListener { location ->
+                            if (location != null) {
+                                latitude.value = location.latitude.toString()
+                                longitude.value = location.longitude.toString()
+                            } else {
+                                latitude.value = "Unavailable"
+                                longitude.value = "Unavailable"
+                            }
+                        }
+                    } else {
+                        requestPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                    }
+                }
+
+                Scaffold(
+                    modifier = Modifier.fillMaxSize(),
+                ) { innerPadding ->
+                    ShowLocationUI(
+                        latitude = latitude.value,
+                        longitude = longitude.value,
+                        modifier = Modifier.padding(innerPadding)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ShowLocationUI(latitude: String, longitude: String, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(text = "Latitude: $latitude", style = MaterialTheme.typography.headlineSmall)
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(text = "Longitude: $longitude", style = MaterialTheme.typography.headlineSmall)
+    }
+}
+
+
+
+
+
+
+// XML Starts from here
+
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- One is for precise location, the other is optional -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+
+    <application
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Get_Location"
+        tools:targetApi="31">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:theme="@style/Theme.Get_Location">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>
