@@ -1,0 +1,27 @@
+from getmac import get_mac_address
+#import os
+import requests
+import json
+
+# remember: not to use VPN
+# prints the location as json file
+url = "https://ipinfo.io/json"
+
+# gets mac location for people using wifif
+mac = get_mac_address(interface="Wi-Fi")
+print(mac)
+
+json_file = requests.get(url)
+
+data = json_file.json()
+
+final_info = {
+
+   "mac address(device)": mac,
+   "city":  data["city"] ,
+    "region": data["region"] ,
+    "country": data["country"]
+}
+# creates json file
+with open("location.json", "w") as Json_file:
+    json.dump(final_info, Json_file, indent=4)
