@@ -4,8 +4,15 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 import datetime
 import os
+from zoneinfo import ZoneInfo
+from dateutil import parser
 
 SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
+
+
+
+     
+  
 
 def main():
     creds = None
@@ -29,27 +36,44 @@ def main():
     # Call the Calendar API
     service = build("calendar", "v3", credentials=creds)
 
-    # detects time
-    # Only limited to 15 right now but can add more
-    now = datetime.datetime.utcnow().isoformat() + "Z"  # 'Z' indicates UTC time
-    events_result = service.events().list(
+   
+       
+     # detects time in EST but needs to be changed as per the user
+    time = datetime.datetime.now(ZoneInfo("America/New_York")).replace(hour=0,minute=0,second=0,microsecond=0)
+
+    for i in range(0,7):
+      # starts from today to next seven days
+      est_start = time + datetime.timedelta(days=i)
+      est_end = time + datetime.timedelta(days=i + 1)
+      
+      # sends the query to calender in UTC
+      time_min = est_start.astimezone(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+      time_max = est_end.astimezone(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+
+     # print(f"\n Checking for events from {time_min} to {time_max}")
+
+
+     # sends query
+      events_result = service.events().list(
         calendarId="primary",
-        timeMin=now,
-        maxResults=15,
+        timeMin= time_min ,
+        timeMax= time_max ,
         singleEvents=True,
         orderBy="startTime"
-    ).execute()
+     ).execute()
 
-    events = events_result.get("items", [])
+      events = events_result.get("items", [])
 
-    if not events:
+      if not events:
         print("No upcoming events found.")
-    else:
+      else:
         print("Upcoming events:")
         for event in events:
             start = event["start"].get("dateTime", event["start"].get("date"))
+            end= event["end"].get("dateTime")
             print(start, "-", event.get("summary"))
+            print(end,"-", event.get("summary"))
 
 # put this line so that it asks for sign in again only for testing
-os.remove("token.json")
+#os.remove("token.json")
 main()
