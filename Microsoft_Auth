@@ -1,0 +1,164 @@
+from flask import Flask, url_for, session, redirect, jsonify
+import requests
+import json
+from authlib.integrations.flask_client import OAuth
+import os
+from dotenv import load_dotenv
+from sqlalchemy import Text, Column, Integer,DateTime, create_engine
+from sqlalchemy.orm import declarative_base
+from sqlalchemy.orm import sessionmaker
+from datetime import datetime
+import secrets
+
+
+nounce = secrets.token_urlsafe(16)
+
+
+load_dotenv()
+
+# uses flask to communicate
+# creates a flask object
+
+app = Flask(__name__)
+
+base= declarative_base()
+
+DATABASE_URL= os.getenv("DATABASE_URL")
+
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+SessionLocal = sessionmaker(bind=engine)
+
+class User(base):
+   __tablename__= 'user'
+   user_id = Column(Text,primary_key=True)
+   outlook_id= Column(Text)
+   full_name= Column(Text)
+   first_name= Column(Text)
+   last_name= Column(Text)
+   Time= Column(DateTime, default=datetime.utcnow)
+   
+base.metadata.create_all(engine)
+
+# create the client id, secret and url and also flask secret pwd
+# used port 5000 for local testing
+appconf= {
+    "MICROSOFT_CLIENT_ID": os.getenv("MICROSOFT_CLIENT_ID") ,
+    "MICROSOFT_CLIENT_SECRET":os.getenv("MICROSOFT_CLIENT_SECRET"),
+    "MICROSOFT_OBJECT_ID" : os.getenv("MICROSOFT_OBJECT_ID") ,
+    "MICROSOFT_DIRECTORY_TENENT_ID": os.getenv("MICROSOFT_DIRECTORY_TENENT_ID"),
+    "MICROSOFT_META_URL": os.getenv("MICROSOFT_META_URL") ,
+    "FLASK_SECRET": os.getenv("FLASK_SECRET"),
+
+    
+
+}
+
+# configures the app with the credentials
+app.config.update(appconf)
+app.secret_key = app.config["FLASK_SECRET"]
+oAuth = OAuth(app)
+
+# uses cookies for authentication
+app.config.update({
+    "SESSION_COOKIE_SAMESITE": "None",  # or "None" if using HTTPS
+    "SESSION_COOKIE_SECURE": True    # should be True if deploying with HTTPS
+})
+
+# registers with all the credentaisl
+oAuth.register("Fittergem",
+               client_id= app.config.get("MICROSOFT_CLIENT_ID"),
+               client_secret= app.config.get("MICROSOFT_CLIENT_SECRET"),
+               server_metadata_url = app.config.get("MICROSOFT_META_URL"),
+               client_kwargs= {"scope": "openid email profile offline_access User.Read" ,
+               
+               }
+               )
+
+
+
+@app.route("/")
+def home():
+    user= session.get("user")
+    if not user:
+       return redirect(url_for("MicrosoftLogin"))
+    else:    
+     token = session.get("user")
+     access_token = token["access_token"]
+
+     headers = {
+     "Authorization": f"Bearer {access_token}"
+      }
+
+     response= requests.get("https://graph.microsoft.com/v1.0/me", headers=headers)
+     user_info = response.json()
+     Microsoft_id = user_info.get("id")
+     Outlook_id = user_info.get("mail") or user_info.get("userPrincipalName")
+     full_name = user_info.get("displayName")
+     first_name = full_name.split(" ")[0] if full_name else ""
+     last_name = " ".join(full_name.split(" ")[1:]) if full_name else ""
+
+
+
+     return json.dumps(user_info, indent=4)
+
+@app.route("/Microsoft-login")
+def MicrosoftLogin():
+    redirect_uri = url_for("MicrosoftCallback", _external=True)
+    return oAuth.Fittergem.authorize_redirect(redirect_uri)
+
+
+@app.route("/signin-Microsoft")
+def MicrosoftCallback():
+  try:
+    token = oAuth.Fittergem.authorize_access_token()
+  except Exception as e:
+      return jsonify({"error": str(e), "message": "Try logging in again, your session expired."}), 400
+  access_token = token["access_token"]
+
+  headers = {
+        "Authorization": f"Bearer {access_token}"
+    }
+
+  response = requests.get("https://graph.microsoft.com/v1.0/me", headers=headers)
+
+  user_info = response.json()
+
+  Microsoft_id = user_info.get("id")
+  Outlook_id = user_info.get("mail") or user_info.get("userPrincipalName")
+  full_name = user_info.get("displayName")
+  first_name = full_name.split(" ")[0] if full_name else ""
+  last_name = " ".join(full_name.split(" ")[1:]) if full_name else ""
+
+  db = SessionLocal()
+  user_exist = db.query(User).filter(User.outlook_id == Outlook_id).first()
+
+ 
+  if not user_exist:
+        new_user = User(
+           
+            user_id =Microsoft_id ,
+            outlook_id=Outlook_id,
+            full_name=full_name,
+            first_name=first_name,
+            last_name=last_name
+        )
+        db.add(new_user)
+        db.commit()
+
+  return jsonify({
+        
+        "ID": Microsoft_id,
+        "Outlook": Outlook_id,
+        "first_name": first_name,
+        "last_name": last_name,
+        "full_name": full_name
+    })
+
+
+
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port
+, debug=True)
