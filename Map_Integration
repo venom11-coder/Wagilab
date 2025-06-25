@@ -7,7 +7,7 @@ import requests
 
 load_dotenv()
 
-API_KEY = "AIzaSyDUPRGKYfc3QwstQFy7BOXgIp_ex33JKqs"
+API_KEY = os.getenv("API_KEY)
 
 # Google's Reverse Geocoding API  
 # takes longitutde and latitude and returns the city 
