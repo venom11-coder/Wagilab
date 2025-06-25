@@ -1,79 +1,307 @@
-from google_auth_oauthlib.flow import InstalledAppFlow
+from flask import Flask, url_for, session, redirect, jsonify
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-import datetime
-import os
+import requests
 from zoneinfo import ZoneInfo
-from dateutil import parser
+import json
+import httpx
+from authlib.integrations.flask_client import OAuth
+import os
+from dotenv import load_dotenv
+from sqlalchemy import Text, Column, Integer,DateTime, create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from datetime import datetime, timedelta, timezone
+
+load_dotenv()
+
+# uses flask to communicate
+# creates a flask object
+
+app = Flask(__name__)
+
+url= "aiintegrationdb-production.up.railway.app"
 
 SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
 
+#VERY IMPORTANT LINE TO FORCE GOOGLE TO GENERATE HTTPS REQUEST!!!!!
+from werkzeug.middleware.proxy_fix import ProxyFix
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
 
-     
-  
 
-def main():
-    creds = None
+# Use Flask's default secure cookie-based session
+app.config["SESSION_PERMANENT"] = False
+app.config["SESSION_USE_SIGNER"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "None"
+app.config["SESSION_COOKIE_SECURE"] = True  # Because Railway uses HTTPS
 
-    # Load existing credentials if available
-    if os.path.exists("token.json"):
-        creds = Credentials.from_authorized_user_file("token.json", SCOPES)
 
-    # If no (valid) credentials available, let user log in.
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
-            creds = flow.run_local_server(port=0)
 
-        # Save credentials for next run
-        with open("token.json", "w") as token:
-            token.write(creds.to_json())
 
-    # Call the Calendar API
-    service = build("calendar", "v3", credentials=creds)
+base= declarative_base()
 
+DATABASE_URL= os.getenv("DATABASE_URL")
+
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+SessionLocal = sessionmaker(bind=engine)
+
+class Calender(base):
+    __tablename__ = 'Calender'
+    client_id_google = Column(Text, primary_key=True)
+    token_google = Column(Text)
+    client_secret_google = Column(Text)
+    scope_google = Column(Text)
+    Time = Column(DateTime, default=datetime.utcnow)
+
+class User(base):
+   __tablename__= 'User'
+   user_id = Column(Text,primary_key=True)
+   email_id= Column(Text)
+   full_name= Column(Text)
+   first_name= Column(Text)
+   last_name= Column(Text)
+   Time= Column(DateTime, default=datetime.utcnow)
    
-       
+base.metadata.create_all(engine)
+
+# create the client id, secret and url and also flask secret pwd
+# used port 5000 for local testing
+appconf= {
+    "OAUTH2_CLIENT_ID": os.getenv("OAUTH2_CLIENT_ID") ,
+    "OAUTH2_CLIENT_SECRET":os.getenv("OAUTH2_CLIENT_SECRET"),
+    "OAUTH2_META_URL": os.getenv("OAUTH2_META_URL"),
+    "FLASK_SECRET": os.getenv("FLASK_SECRET"),
+    
+
+}
+print(appconf)
+# configures the app with the credentials
+
+app.config.update(appconf)
+app.secret_key = app.config["FLASK_SECRET"]
+oAuth = OAuth(app)
+
+
+# registers with all the credentaisl
+oAuth.register("Fittergem",
+               client_id= app.config.get("OAUTH2_CLIENT_ID"),
+               client_secret= app.config.get("OAUTH2_CLIENT_SECRET"),
+               server_metadata_url = app.config.get("OAUTH2_META_URL"),
+               client_kwargs= {"scope": "openid https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/calendar.readonly" ,
+               
+               }
+               )
+
+
+
+@app.route("/")
+def home():
+    db = SessionLocal()
+    user_id= session.get("user_id")
+    
+    if not user_id:
+       return redirect(url_for("googleLogin"))
+    user_exist = db.query(User).filter(User.user_id==user_id).first()
+    if user_exist is not None:
+        return jsonify(Status="User found! Take to homepage")
+    else:
+        return redirect(url_for("googleLogin", external=True))
+
+@app.route("/google-login")
+def googleLogin():
+    redirect_uri = url_for("googleCallback", _external=True)
+    print(redirect_uri)
+    return oAuth.Fittergem.authorize_redirect(redirect_uri)
+
+
+@app.route("/signin-google")
+def googleCallback():
+    try:
+        token = oAuth.Fittergem.authorize_access_token()
+        access_token = token["access_token"]
+
+        headers = {
+            "Authorization": f"Bearer {access_token}"
+        }
+        
+        response = requests.get("https://www.googleapis.com/oauth2/v1/userinfo", headers=headers)
+        user_info = response.json()
+
+        google_id = user_info["id"]
+        session["user_id"] = google_id
+        email_id = user_info["email"]
+        full_name = user_info["name"]
+        first_name = user_info["given_name"]
+        last_name = user_info["family_name"]
+
+        db = SessionLocal()
+        user_exist = db.query(User).filter(User.user_id == google_id, User.email_id == email_id).first()
+
+        if not user_exist:
+            new_user = User(
+                user_id=google_id,
+                email_id=email_id,
+                full_name=full_name,
+                first_name=first_name,
+                last_name=last_name
+            )
+            db.add(new_user)
+            db.commit()
+
+        return jsonify({
+            "user_id": google_id,
+            "email": email_id,
+            "first_name": first_name,
+            "last_name": last_name,
+            "full_name": full_name
+        })
+
+    except Exception as e:
+        print("Error during callback:", e)
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/logout")
+async def logout():
+    session.clear()
+    return redirect("/")
+
+@app.route("/google-calender")
+def Calender_Integration():
+ user_id = session["user_id"]
+ 
+ db=SessionLocal()
+ user_exist = db.query(Calender).filter(Calender.client_id_google==user_id).first()
+ 
+ if user_exist is None:
+    return redirect("/calendar-access")
+ 
+ data=json.loads(user_exist.token_google)
+ if user_exist is not None:
+  creds=  Credentials.from_authorized_user_info(data, SCOPES)
+ service = build("calendar", "v3", credentials=creds)
+
+ if creds.expired and creds.refresh_token:
+    creds.refresh(Request())
+    
+    user_exist.token_google = creds.to_json()
+    db.commit()
+
+
+
      # detects time in EST but needs to be changed as per the user
-    time = datetime.datetime.now(ZoneInfo("America/New_York")).replace(hour=0,minute=0,second=0,microsecond=0)
-
-    for i in range(0,7):
-      # starts from today to next seven days
-      est_start = time + datetime.timedelta(days=i)
-      est_end = time + datetime.timedelta(days=i + 1)
+ time = datetime.now(ZoneInfo("America/New_York")).replace(hour=0,minute=0,second=0,microsecond=0)
+       
+     # starts from today to next seven days
+ all_events =[]
+ for i in range(0,7):
+       est_start = time + timedelta(days=i)
+       est_end = time + timedelta(days=i + 1)
       
-      # sends the query to calender in UTC
-      time_min = est_start.astimezone(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
-      time_max = est_end.astimezone(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+       # sends the query to calender in UTC
+       time_min = est_start.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+       time_max = est_end.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
-     # print(f"\n Checking for events from {time_min} to {time_max}")
-
-
-     # sends query
-      events_result = service.events().list(
+       # sends query
+       events_result = service.events().list(
         calendarId="primary",
         timeMin= time_min ,
         timeMax= time_max ,
         singleEvents=True,
         orderBy="startTime"
-     ).execute()
+       ).execute()
 
-      events = events_result.get("items", [])
 
-      if not events:
+       events = events_result.get("items", [])
+       lines = []
+
+       prompt= ( "The following is a 7-day Google Calendar schedule. "
+       "You do not have to store any information just have a look at the schedule"
+       "Summarize when the user is busy (with meetings or events) and when the user seems to be free each day. "
+       "Return a brief availability report (e.g., 'Free in mornings except Tuesday'). "
+       "This report will help in planning workouts and diet suggestions later."
+       " Detect periods of high workload or multiple back-to-back meetings. "
+       "Flag these as times when the user may be mentally or physically tired."
+       "2. Identify 1-2 ideal **free time slots** (at least 20 minutes) where a short workout could be realistically done."
+       "3. Generate a clear summary for each day in the following format:"
+       "- Example: `Monday: 3 meetings (10am–4pm), likely tired by evening. Free slot: 8-9am.`"
+       " - Be concise and use time ranges when possible."
+       "4. Do not provide any suggestions or ask the user anything. Just return the 7-line daily breakdown."
+       "Just reply 'noted' when you have went through all the instructions and details"
+       
+       "The schedule is below:"
+       )
+       if not events:
         print("No upcoming events found.")
-      else:
+        prompt = ("if no events found. Do not assume the user is free. When recommending workouts, diet changes, or other plans, do not assume full availability. Instead, ask the user about their preferred or available time slots before making detailed suggestions. Just reply with 'noted'.")
+       else:
         print("Upcoming events:")
         for event in events:
-            start = event["start"].get("dateTime", event["start"].get("date"))
-            end= event["end"].get("dateTime")
-            print(start, "-", event.get("summary"))
-            print(end,"-", event.get("summary"))
+            event_detail = {
+            "start" : event["start"].get("dateTime", event["start"].get("date")) ,
+            "end" : event["end"].get("dateTime") ,
+            "summary": event.get("summary")
+            
+            }
+            all_events.append(event_detail)
+        print(all_events)
+        for event in all_events:
+            summary = event["summary"]
+            start = event["start"]
+            end = event["end"]
+            formatted = f"Event: {summary}\nStart: {start}\nEnd: {end}"
+            lines.append(formatted)
 
-# put this line so that it asks for sign in again only for testing
-#os.remove("token.json")
-main()
+ schedule_string = "\n\n".join(lines)
+ full_prompt = prompt + schedule_string
+ user_input = {
+         
+ "user_id": session.get("user_id") ,
+ "message": full_prompt
+  }
+     
+ with httpx.Client() as client:
+        response =   client.post(f"https://{url}/chat", json=user_input)
+        print(response.status_code)
+        print(response.json())
+        return jsonify(status="user calender accessed!")
+@app.route("/calendar-access")
+def calenderaccess():
+  redirect_uri = url_for("calenderstore", _external=True)
+  return oAuth.Fittergem.authorize_redirect(
+    redirect_uri,
+    access_type="offline",
+    prompt="consent"
+)
+
+
+@app.route("/calender-info-store")
+def calenderstore():
+  db = SessionLocal()
+  token= oAuth.Fittergem.authorize_access_token()
+  creds_info = {
+    "token": token["access_token"],
+    "refresh_token": token.get("refresh_token"),
+    "token_uri": "https://oauth2.googleapis.com/token",
+    "client_id": app.config["OAUTH2_CLIENT_ID"],
+    "client_secret": app.config["OAUTH2_CLIENT_SECRET"],
+    "scopes": SCOPES
+}
+
+ 
+  new_user = Calender(
+    client_id_google=session["user_id"],
+    token_google=json.dumps(creds_info),
+    scope_google=token.get("scope"),
+    client_secret_google=app.config["OAUTH2_CLIENT_SECRET"]
+)
+
+  db.merge(new_user)
+  db.commit()
+  return redirect("/google-calender") 
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=True)
