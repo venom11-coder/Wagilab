@@ -1,4 +1,4 @@
-from flask import Flask # importing flask 
+from flask import Flask, jsonify # importing flask 
 from flask import request
 import os
 from dotenv import load_dotenv
@@ -7,9 +7,10 @@ import requests
 
 load_dotenv()
 
-API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
+API_KEY = "AIzaSyDUPRGKYfc3QwstQFy7BOXgIp_ex33JKqs"
 
-# Google's Reverse Geocoding API 
+# Google's Reverse Geocoding API  
+# takes longitutde and latitude and returns the city 
 
 app = Flask(__name__) # constructor that initialises the flask to the app
 
@@ -25,10 +26,10 @@ def get_location():
   response = requests.get(url)
   location = response.json()
   city = location["results"][0]["formatted_address"]
-  return city
+  return jsonify(city=city)
 
 
-
+@app.route("/", methods=["GET"])
 def home():
     # for testing remove once done
   url = "http://127.0.0.1:5000/location"
