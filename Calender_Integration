@@ -21,7 +21,7 @@ load_dotenv()
 
 app = Flask(__name__)
 
-url= "aiintegrationdb-production.up.railway.app"
+url= "put your railway URL for AI agent"
 
 SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
 
