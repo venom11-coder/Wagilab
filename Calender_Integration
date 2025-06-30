@@ -1,11 +1,11 @@
-from flask import Flask, url_for, session, redirect, jsonify
+from flask import Flask, url_for, session, redirect, jsonify, request
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 import requests
 from zoneinfo import ZoneInfo
-import json
 import httpx
+import json
 from authlib.integrations.flask_client import OAuth
 import os
 from dotenv import load_dotenv
@@ -16,14 +16,19 @@ from datetime import datetime, timedelta, timezone
 
 load_dotenv()
 
+api_key = os.getenv("api_key")
 # uses flask to communicate
 # creates a flask object
 
 app = Flask(__name__)
 
-url= "put your railway URL for AI agent"
+MAP_API_KEY = os.getenv("MAP_API_KEY")
 
-SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
+url= "aiintegrationdb-production.up.railway.app"
+
+url_timezone = "web-production-2504b.up.railway.app/timezone"
+
+SCOPES = ['https://www.googleapis.com/auth/calendar']
 
 #VERY IMPORTANT LINE TO FORCE GOOGLE TO GENERATE HTTPS REQUEST!!!!!
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -76,7 +81,7 @@ appconf= {
     
 
 }
-print(appconf)
+
 # configures the app with the credentials
 
 app.config.update(appconf)
@@ -89,7 +94,7 @@ oAuth.register("Fittergem",
                client_id= app.config.get("OAUTH2_CLIENT_ID"),
                client_secret= app.config.get("OAUTH2_CLIENT_SECRET"),
                server_metadata_url = app.config.get("OAUTH2_META_URL"),
-               client_kwargs= {"scope": "openid https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/calendar.readonly" ,
+               client_kwargs= {"scope": "openid https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/calendar" ,
                
                }
                )
@@ -112,7 +117,6 @@ def home():
 @app.route("/google-login")
 def googleLogin():
     redirect_uri = url_for("googleCallback", _external=True)
-    print(redirect_uri)
     return oAuth.Fittergem.authorize_redirect(redirect_uri)
 
 
@@ -169,12 +173,23 @@ async def logout():
 
 @app.route("/google-calender")
 def Calender_Integration():
+ msg = request.args.get("msg")
+ if msg:
+    # Rebuild GPT prompt with that message instead of just the event list
+    user_input = {
+        "user_id": session.get("user_id"),
+        "message": msg
+    }
+    response = httpx.post(f"https://{url}/chat", json=user_input)
+    # You can now apply the returned GPT plan (if JSON) automatically
+
  user_id = session["user_id"]
  
  db=SessionLocal()
  user_exist = db.query(Calender).filter(Calender.client_id_google==user_id).first()
  
  if user_exist is None:
+    session["pending_message"] = request.json.get("message")
     return redirect("/calendar-access")
  
  data=json.loads(user_exist.token_google)
@@ -188,10 +203,22 @@ def Calender_Integration():
     user_exist.token_google = creds.to_json()
     db.commit()
 
+    coordinates = {
+       "lat" : data.get("latitude") ,
+       "lon" : data.get("longitude")
+       }
+
+    with httpx.Client() as client:
+        response =   client.post(f"https://{url_timezone}/chat", json=coordinates)
+        timezone_data = response.json()
+        if  not timezone_data:
+           timezone_data = "America/Toronto"
+        timezone_id = timezone_data.get("timeZoneId", "America/Toronto")   
+
 
 
      # detects time in EST but needs to be changed as per the user
- time = datetime.now(ZoneInfo("America/New_York")).replace(hour=0,minute=0,second=0,microsecond=0)
+ time = datetime.now(ZoneInfo(timezone_id)).replace(hour=0,minute=0,second=0,microsecond=0)
        
      # starts from today to next seven days
  all_events =[]
@@ -216,6 +243,10 @@ def Calender_Integration():
        events = events_result.get("items", [])
        lines = []
 
+       data = request.json if request.is_json else {}
+
+    
+
        prompt= ( "The following is a 7-day Google Calendar schedule. "
        "You do not have to store any information just have a look at the schedule"
        "Summarize when the user is busy (with meetings or events) and when the user seems to be free each day. "
@@ -229,9 +260,9 @@ def Calender_Integration():
        " - Be concise and use time ranges when possible."
        "4. Do not provide any suggestions or ask the user anything. Just return the 7-line daily breakdown."
        "Just reply 'noted' when you have went through all the instructions and details"
-       
        "The schedule is below:"
        )
+
        if not events:
         print("No upcoming events found.")
         prompt = ("if no events found. Do not assume the user is free. When recommending workouts, diet changes, or other plans, do not assume full availability. Instead, ask the user about their preferred or available time slots before making detailed suggestions. Just reply with 'noted'.")
@@ -245,7 +276,7 @@ def Calender_Integration():
             
             }
             all_events.append(event_detail)
-        print(all_events)
+        
         for event in all_events:
             summary = event["summary"]
             start = event["start"]
@@ -254,17 +285,19 @@ def Calender_Integration():
             lines.append(formatted)
 
  schedule_string = "\n\n".join(lines)
- full_prompt = prompt + schedule_string
+ messages = [
+    {"role": "system", "content": prompt},
+    
+    {"role": "system", "content": schedule_string} # changes to system here!!!! NEEDS TO BE DEPLOYED AGAIN IF CHANGE ACCEPTED!!!!!
+]
  user_input = {
          
  "user_id": session.get("user_id") ,
- "message": full_prompt
+ "message": messages
   }
      
  with httpx.Client() as client:
         response =   client.post(f"https://{url}/chat", json=user_input)
-        print(response.status_code)
-        print(response.json())
         return jsonify(status="user calender accessed!")
 @app.route("/calendar-access")
 def calenderaccess():
@@ -299,7 +332,118 @@ def calenderstore():
 
   db.merge(new_user)
   db.commit()
-  return redirect("/google-calender") 
+  pending = session.pop("pending_message", None)
+  if pending:
+        return redirect(url_for("google_calender", msg=pending))
+
+  return redirect("/google-calender")
+
+@app.route("/calender-update" , methods=['POST'])
+def calender_update():
+   
+   
+   db = SessionLocal()
+   
+   
+   data_event= request.get_json()
+  
+
+   user= db.query(Calender).filter(Calender.client_id_google==session["user_id"]).first()
+   if not user:
+     return redirect("/calendar-access")
+   
+   data= json.loads(user.token_google)
+
+   creds = Credentials.from_authorized_user_info(data, SCOPES)
+
+   service = build("calendar", "v3", credentials=creds)
+   if not creds.valid or not creds:
+      if creds and creds.expired and creds.refresh_token:
+         creds.refresh(Request())
+
+
+   event_ids =[]
+
+   if "events" not in data_event or not isinstance(data_event["events"], list):
+      return jsonify({"error": "Invalid format: 'events' should be a list"}), 400
+
+   for each_event in data_event["events"]:
+     calender_event = {
+        
+        "summary" :  each_event["summary"] ,
+        "description": each_event["event"] ,
+       "start" : {
+          "dateTime": each_event["time_start"] ,
+          "timeZone": each_event["timeZone"]
+           
+        } ,
+        "end" : {
+           
+        "dateTime": each_event["time_end"] ,
+        "timeZone": each_event["timeZone"]
+        }
+
+        
+     }
+     new_schedule = service.events().insert(calendarId="primary", body=calender_event).execute()
+     event_ids.append(new_schedule["id"])
+
+
+
+   return jsonify({"status": "Events created", "event_ids": event_ids})
+
+@app.route("/calender-delete", methods=['POST'])
+def calender_event_delete():
+   db = SessionLocal()
+   
+   
+   data_event= request.get_json()
+  
+
+   user= db.query(Calender).filter(Calender.client_id_google==session["user_id"]).first()
+   if not user:
+     return redirect("/calendar-access")
+   
+   data= json.loads(user.token_google)
+
+   creds = Credentials.from_authorized_user_info(data, SCOPES)
+
+   service = build("calendar", "v3", credentials=creds)
+   if not creds.valid or not creds:
+      if creds and creds.expired and creds.refresh_token:
+         creds.refresh(Request())
+    
+   
+   # Add this after data_event = request.get_json()
+   user_summary = data_event.get("summary")
+   date = data_event.get("date")  # 'YYYY-MM-DD'
+   timeZone = data_event.get("timeZone", "America/New_York")
+
+   
+   start_of_day = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=ZoneInfo(timeZone))
+   end_of_day = start_of_day + timedelta(days=1)
+
+   time_min = start_of_day.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+   time_max = end_of_day.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+   events_result = service.events().list(
+    calendarId="primary",
+    timeMin=time_min,
+    timeMax=time_max,
+    singleEvents=True,
+    orderBy="startTime"
+    ).execute()
+   try:
+    events = events_result.get("items", []) 
+    for event in events:
+     if event.get("summary") == user_summary:
+        # Optionally also match time if needed
+        # Delete event
+   
+       service.events().delete(calendarId="primary", eventId=event["id"]).execute()
+       return jsonify({"status": "Event deleted", "event_id": event["id"]})
+   except Exception as e:
+       return jsonify({"status": "Delete failed", "error": str(e)}), 500
 
 
 if __name__ == "__main__":
