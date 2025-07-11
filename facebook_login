@@ -1,0 +1,110 @@
+from flask import Flask, redirect, url_for, request, session, jsonify
+import requests
+from dotenv import load_dotenv
+import os
+from sqlalchemy import Text, Column, Integer,DateTime, create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from datetime import datetime
+
+load_dotenv()
+
+
+app = Flask(__name__)
+
+base= declarative_base()
+
+DATABASE_URL= os.getenv("DATABASE_URL")
+
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+SessionLocal = sessionmaker(bind=engine)
+
+class Facebook(base):
+    __tablename__ = 'Facebook'
+    client_id_facebook = Column(Text, primary_key=True)
+    name = Column(Text)
+    Time = Column(DateTime, default=datetime.utcnow)
+
+base.metadata.create_all(bind=engine)
+
+app.secret_key="vsfhorwufhsdcohfogfhvfgfv"
+
+from werkzeug.middleware.proxy_fix import ProxyFix
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
+#facebook creds
+fb_app_id= os.getenv("fb_app_id")
+fb_app_secret = os.getenv("fb_app_secret")
+redirect_uri = os.getenv("redirect_uri")
+
+@app.route("/")
+def home():
+    message= "welcome to home page"
+    return jsonify({"message": message})
+
+
+@app.route("/facebook/login")
+def facebook_login():
+    return redirect(f"https://www.facebook.com/v18.0/dialog/oauth?client_id={fb_app_id}&redirect_uri={redirect_uri}&scope=public_profile&response_type=code")
+
+
+@app.route("/facebook/callback")
+def facebook_callback():
+    code = request.args.get('code')
+    if not code:
+        return jsonify({"error": "Code not found in callback", "full_params": request.args.to_dict()}), 400
+    if code:
+       response = requests.get("https://graph.facebook.com/v18.0/oauth/access_token", params={
+       "client_id": fb_app_id,
+       "redirect_uri": redirect_uri,
+       "client_secret": fb_app_secret,
+       "code": code
+})
+       data= response.json()
+       if "access_token" not in data:
+           return jsonify({"error": "user not found!"}), 400
+       if "access_token" in data:
+            session["access_token"] = data["access_token"]
+            access_token = data["access_token"]
+
+
+            # fetch user response
+            user_response = requests.get(f"https://graph.facebook.com/me?fields=id,name,email&access_token={access_token}")
+            
+            user_data=user_response.json()
+            user_id = user_data["id"]
+            name = user_data["name"]
+
+            db = SessionLocal()
+
+            user_exists = db.query(Facebook).filter(Facebook.client_id_facebook==user_id).first()
+            if user_exists:
+               return jsonify({
+             "status": "existing_user",
+             "user_id": user_exists.client_id_facebook,
+             "name": user_exists.name,
+             "auth_provider": "facebook"
+})
+
+            
+            
+            new_user= Facebook(
+                    client_id_facebook= user_id,
+                    name= name
+                )
+            db.add(new_user)
+            db.commit()
+            
+
+            #print(user_data("email", "Not found"))
+            return jsonify({
+            "status": "new_user",
+            "user_id": new_user.client_id_facebook,
+            "name": new_user.name,
+            "auth_provider": "facebook"
+})
+
+
+
+if __name__ == "__main__":
+    app.run()
+
