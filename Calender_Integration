@@ -30,9 +30,9 @@ CORS(app, supports_credentials=True)
 
 MAP_API_KEY = os.getenv("MAP_API_KEY")
 
-url= "aiintegrationdb-production.up.railway.app"
+url= "YOUR-BACKEND-URL-FOR-CHATGPT"
 
-#url_timezone = "web-production-2504b.up.railway.app/timezone"
+#url_timezone = "YOUR-BACKEND-URL-FOR-GOOGLE-MAPS/timezone"
 
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 
